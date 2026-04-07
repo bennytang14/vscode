@@ -1,0 +1,109 @@
+import numpy as np
+import pandas as pd
+from astroquery.jplhorizons import Horizons
+
+# =========================================================
+# PHYS2116 - 3I/ATLAS starter query script
+# =========================================================
+
+# Horizons target for 3I/ATLAS
+# JPL SBDB resolves 3I -> C/2025 N1 (ATLAS)
+target = "3I"
+
+# Time range
+# You can expand this later to cover the full passage
+start_date = "2025-07-01"
+stop_date  = "2026-07-01"
+step_size  = "5d"
+
+epochs = {
+    "start": start_date,
+    "stop": stop_date,
+    "step": step_size
+}
+
+# ---------------------------------------------------------
+# 1) HELIOCENTRIC VECTORS
+#    location='500@10' means Sun-centred vectors
+# ---------------------------------------------------------
+obj_vec = Horizons(id=target, location="500@10", epochs=epochs)
+vec = obj_vec.vectors()
+df_vec = vec.to_pandas()
+
+# Compute heliocentric distance and speed
+df_vec["r_au"] = np.sqrt(df_vec["x"]**2 + df_vec["y"]**2 + df_vec["z"]**2)
+df_vec["speed_au_per_day"] = np.sqrt(
+    df_vec["vx"]**2 + df_vec["vy"]**2 + df_vec["vz"]**2
+)
+
+# Save vector output
+vec_cols_to_save = [
+    "datetime_str", "x", "y", "z", "vx", "vy", "vz",
+    "r_au", "speed_au_per_day"
+]
+df_vec[vec_cols_to_save].to_csv(
+    "3I_ATLAS_vectors.csv",
+    index=False
+)
+
+print("Saved heliocentric vectors to 3I_ATLAS_vectors.csv")
+
+# ---------------------------------------------------------
+# 2) GEOCENTRIC EPHEMERIDES
+#    location='500' means observer at Earth geocentre
+# ---------------------------------------------------------
+obj_eph = Horizons(id=target, location="500", epochs=epochs)
+eph = obj_eph.ephemerides()
+df_eph = eph.to_pandas()
+
+print("\nAvailable ephemeris columns:")
+print(df_eph.columns.tolist())
+
+# Try to keep useful columns if they exist
+preferred_cols = [
+    "datetime_str",
+    "RA", "DEC",
+    "delta",      # distance from Earth [AU]
+    "r",          # distance from Sun [AU]
+    "elong",      # solar elongation
+    "alpha",      # phase angle
+    "V",          # visual magnitude
+    "RA_3sigma",
+    "DEC_3sigma",
+    "SMAA_3sigma",
+    "SMIA_3sigma",
+    "Theta_3sigma",
+    "Area_3sigma",
+    "RSS_3sigma"
+]
+
+existing_cols = [col for col in preferred_cols if col in df_eph.columns]
+df_eph[existing_cols].to_csv("3I_ATLAS_ephemerides.csv", index=False)
+
+print("Saved geocentric ephemerides to 3I_ATLAS_ephemerides.csv")
+
+# ---------------------------------------------------------
+# 3) SIMPLE SUMMARY OUTPUTS
+# ---------------------------------------------------------
+if "r_au" in df_vec.columns:
+    idx_peri = df_vec["r_au"].idxmin()
+    peri_row = df_vec.loc[idx_peri]
+    print("\nApproximate perihelion from queried sample:")
+    print(f"Date: {peri_row['datetime_str']}")
+    print(f"Heliocentric distance: {peri_row['r_au']:.6f} AU")
+
+if "delta" in df_eph.columns:
+    idx_close_earth = df_eph["delta"].idxmin()
+    earth_row = df_eph.loc[idx_close_earth]
+    print("\nApproximate closest approach to Earth from queried sample:")
+    print(f"Date: {earth_row['datetime_str']}")
+    print(f"Geocentric distance: {earth_row['delta']:.6f} AU")
+
+if "V" in df_eph.columns:
+    idx_bright = df_eph["V"].idxmin()
+    bright_row = df_eph.loc[idx_bright]
+    print("\nApproximate brightest date from queried sample:")
+    print(f"Date: {bright_row['datetime_str']}")
+    print(f"V magnitude: {bright_row['V']:.3f}")
+
+print("\nDone.")

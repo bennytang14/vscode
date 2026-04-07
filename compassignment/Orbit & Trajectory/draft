@@ -1,0 +1,450 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from astroquery.jplhorizons import Horizons
+
+# =========================================================
+# SETTINGS
+# =========================================================
+target = "3I"   # 3I/ATLAS
+
+epochs = {
+    "start": "2025-07-01",
+    "stop":  "2026-07-01",
+    "step":  "1d"
+}
+
+# =========================================================
+# HELPER FUNCTION: get heliocentric vectors
+# location='500@10' = Sun-centred vectors
+# =========================================================
+def get_vectors_dataframe(target_id, epochs):
+    obj = Horizons(id=target_id, location="500@10", epochs=epochs)
+    vec = obj.vectors()
+    df = vec.to_pandas()
+
+    # Clean datetime strings once here
+    df["time"] = pd.to_datetime(
+        df["datetime_str"]
+        .str.replace("A.D.", "", regex=False)
+        .str.strip(),
+        errors="coerce"
+    )
+
+    # Derived quantities
+    df["r_au"] = np.sqrt(df["x"]**2 + df["y"]**2 + df["z"]**2)
+    df["speed_au_per_day"] = np.sqrt(df["vx"]**2 + df["vy"]**2 + df["vz"]**2)
+
+    return df
+
+# =========================================================
+# 1) COMET VECTORS
+# =========================================================
+df_comet = get_vectors_dataframe(target, epochs)
+
+# =========================================================
+# 2) EARTH VECTORS
+# =========================================================
+df_earth = get_vectors_dataframe("399", epochs)   # Earth
+
+# =========================================================
+# 3) GEOCENTRIC EPHEMERIDES FOR EARTH DISTANCE
+# location='500' = Earth geocentre
+# =========================================================
+obj_eph = Horizons(id=target, location="500", epochs=epochs)
+eph = obj_eph.ephemerides()
+df_eph = eph.to_pandas()
+
+df_eph["time"] = pd.to_datetime(
+    df_eph["datetime_str"]
+    .str.replace("A.D.", "", regex=False)
+    .str.strip(),
+    errors="coerce"
+)
+
+# =========================================================
+# 4) FIND IMPORTANT POINTS
+# =========================================================
+
+# Start and end points of comet path
+start_row = df_comet.iloc[0]
+end_row = df_comet.iloc[-1]
+
+# Perihelion = minimum distance from Sun
+idx_peri = df_comet["r_au"].idxmin()
+peri_row = df_comet.loc[idx_peri]
+
+# Closest approach to Earth from ephemerides
+if "delta" in df_eph.columns:
+    idx_earth_close = df_eph["delta"].idxmin()
+    earth_close_row = df_eph.loc[idx_earth_close]
+else:
+    earth_close_row = None
+
+# =========================================================
+# 5) PRINT KEY RESULTS
+# =========================================================
+print("========== KEY RESULTS ==========")
+print(f"Start date: {start_row['datetime_str']}")
+print(f"End date:   {end_row['datetime_str']}")
+print()
+
+print("Perihelion (closest approach to Sun):")
+print(f"Date: {peri_row['datetime_str']}")
+print(f"Distance from Sun: {peri_row['r_au']:.6f} AU")
+print()
+
+if earth_close_row is not None:
+    print("Closest approach to Earth:")
+    print(f"Date: {earth_close_row['datetime_str']}")
+    print(f"Distance from Earth: {earth_close_row['delta']:.6f} AU")
+else:
+    print("No 'delta' column returned, so closest Earth approach could not be calculated.")
+
+# =========================================================
+# 6) PLOT ORBITS
+# =========================================================
+plt.figure(figsize=(8, 8))
+
+# Comet orbit
+plt.plot(df_comet["x"], df_comet["y"], linewidth=2, label="3I/ATLAS trajectory")
+
+# Earth orbit
+plt.plot(df_earth["x"], df_earth["y"], linestyle="--", linewidth=1.5, label="Earth orbit")
+
+# Sun
+plt.scatter(0, 0, s=150, marker="o", label="Sun")
+
+# Start point
+plt.scatter(start_row["x"], start_row["y"], s=80, marker="o", label="Start")
+
+# End point
+plt.scatter(end_row["x"], end_row["y"], s=80, marker="s", label="End")
+
+# Perihelion point
+plt.scatter(peri_row["x"], peri_row["y"], s=120, marker="*", label="Perihelion")
+
+# Labels and formatting
+plt.xlabel("x [AU]")
+plt.ylabel("y [AU]")
+plt.title("Heliocentric trajectory of 3I/ATLAS")
+plt.axis("equal")
+plt.grid(True)
+plt.legend()
+plt.tight_layout()
+
+# Save figure
+plt.savefig("3I_ATLAS_orbit_with_markers.png", dpi=300)
+plt.show()
+
+print()
+print("Saved figure: 3I_ATLAS_orbit_with_markers.png")
+
+# distance from Sun vs time
+plt.figure(figsize=(10, 5))
+plt.plot(df_comet["time"], df_comet["r_au"], linewidth=2, label="Distance from Sun")
+
+# perihelion marker
+plt.scatter(df_comet["time"].iloc[idx_peri], df_comet["r_au"].iloc[idx_peri],
+            s=80, marker="o", label="Perihelion")
+
+# vertical line at perihelion date
+plt.axvline(df_comet["time"].iloc[idx_peri], linestyle="--")
+
+plt.xlabel("Date")
+plt.ylabel("Distance from Sun [AU]")
+plt.title("Distance of 3I/ATLAS from the Sun over time")
+plt.grid(True)
+plt.legend()
+plt.tight_layout()
+plt.savefig("distance_sun_vs_time.png", dpi=300)
+plt.show()
+
+
+# distance from Earth vs time
+if "delta" in df_eph.columns:
+    idx_earth_close = df_eph["delta"].idxmin()
+
+    plt.figure(figsize=(10, 5))
+    plt.plot(df_eph["time"], df_eph["delta"], linewidth=2, label="Distance from Earth")
+
+    # closest approach marker
+    plt.scatter(df_eph["time"].iloc[idx_earth_close], df_eph["delta"].iloc[idx_earth_close],
+                s=80, marker="o", label="Closest approach")
+
+    # vertical line at closest approach
+    plt.axvline(df_eph["time"].iloc[idx_earth_close], linestyle="--")
+
+    plt.xlabel("Date")
+    plt.ylabel("Distance from Earth [AU]")
+    plt.title("Distance of 3I/ATLAS from Earth over time")
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig("distance_earth_vs_time.png", dpi=300)
+    plt.show()
+else:
+    print("No 'delta' column found.")
+
+    # =========================================================
+# 7) CLOSEST APPROACHES TO PLANETS
+# =========================================================
+planet_ids = {
+    "Mercury": "199",
+    "Venus": "299",
+    "Earth": "399",
+    "Mars": "499",
+    "Jupiter": "599",
+    "Saturn": "699",
+    "Uranus": "799",
+    "Neptune": "899"
+}
+
+closest_approaches = []
+
+for planet_name, planet_id in planet_ids.items():
+    df_planet = get_vectors_dataframe(planet_id, epochs)
+
+    merged = pd.merge(
+        df_comet[["datetime_str", "time", "x", "y", "z"]],
+        df_planet[["datetime_str", "x", "y", "z"]],
+        on="datetime_str",
+        suffixes=("_comet", "_planet")
+    )
+
+    merged["distance_au"] = np.sqrt(
+        (merged["x_comet"] - merged["x_planet"])**2 +
+        (merged["y_comet"] - merged["y_planet"])**2 +
+        (merged["z_comet"] - merged["z_planet"])**2
+    )
+
+    idx_min = merged["distance_au"].idxmin()
+    row_min = merged.loc[idx_min]
+
+    closest_approaches.append({
+        "planet": planet_name,
+        "date": row_min["datetime_str"],
+        "distance_au": row_min["distance_au"]
+    })
+
+df_close = pd.DataFrame(closest_approaches)
+df_close = df_close.sort_values("distance_au").reset_index(drop=True)
+
+print("\nClosest approaches to planets:")
+print(df_close)
+
+df_close.to_csv("3I_ATLAS_closest_approaches.csv", index=False)
+
+# =========================================================
+# 8) UNCERTAINTY / ERROR ELLIPSE ANALYSIS
+# =========================================================
+
+# Check which uncertainty columns Horizons returned
+uncertainty_columns = [
+    "RA_3sigma",
+    "DEC_3sigma",
+    "SMAA_3sigma",
+    "SMIA_3sigma",
+    "Theta_3sigma",
+    "Area_3sigma",
+    "RSS_3sigma"
+]
+
+available_uncertainty_columns = [col for col in uncertainty_columns if col in df_eph.columns]
+
+print("\nAvailable uncertainty columns:")
+print(available_uncertainty_columns)
+
+# Save a smaller uncertainty table if columns exist
+if len(available_uncertainty_columns) > 0:
+    cols_to_save = ["datetime_str", "time"] + available_uncertainty_columns
+    df_eph[cols_to_save].to_csv("3I_ATLAS_uncertainty.csv", index=False)
+    print("Saved uncertainty table: 3I_ATLAS_uncertainty.csv")
+else:
+    print("No uncertainty columns were returned by Horizons for this query.")
+
+    # =========================================================
+# 9) UNCERTAINTY PLOTS
+# =========================================================
+
+# Plot ellipse semi-major axis if available
+if "SMAA_3sigma" in df_eph.columns:
+    idx_smaa_max = df_eph["SMAA_3sigma"].idxmax()
+
+    plt.figure(figsize=(10, 5))
+    plt.plot(df_eph["time"], df_eph["SMAA_3sigma"], linewidth=2, label="SMAA_3sigma")
+    plt.scatter(df_eph["time"].iloc[idx_smaa_max], df_eph["SMAA_3sigma"].iloc[idx_smaa_max],
+                s=80, marker="o", label="Maximum uncertainty")
+    plt.axvline(df_eph["time"].iloc[idx_smaa_max], linestyle="--")
+
+    plt.xlabel("Date")
+    plt.ylabel("Sky-plane semi-major axis uncertainty")
+    plt.title("Uncertainty ellipse semi-major axis of 3I/ATLAS over time")
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig("uncertainty_smaa_vs_time.png", dpi=300)
+    plt.show()
+
+# Plot ellipse area if available
+if "Area_3sigma" in df_eph.columns:
+    idx_area_max = df_eph["Area_3sigma"].idxmax()
+
+    plt.figure(figsize=(10, 5))
+    plt.plot(df_eph["time"], df_eph["Area_3sigma"], linewidth=2, label="Area_3sigma")
+    plt.scatter(df_eph["time"].iloc[idx_area_max], df_eph["Area_3sigma"].iloc[idx_area_max],
+                s=80, marker="o", label="Maximum area")
+    plt.axvline(df_eph["time"].iloc[idx_area_max], linestyle="--")
+
+    plt.xlabel("Date")
+    plt.ylabel("Uncertainty ellipse area")
+    plt.title("Uncertainty ellipse area of 3I/ATLAS over time")
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig("uncertainty_area_vs_time.png", dpi=300)
+    plt.show()
+
+# Plot RSS uncertainty if available
+if "RSS_3sigma" in df_eph.columns:
+    idx_rss_max = df_eph["RSS_3sigma"].idxmax()
+
+    plt.figure(figsize=(10, 5))
+    plt.plot(df_eph["time"], df_eph["RSS_3sigma"], linewidth=2, label="RSS_3sigma")
+    plt.scatter(df_eph["time"].iloc[idx_rss_max], df_eph["RSS_3sigma"].iloc[idx_rss_max],
+                s=80, marker="o", label="Maximum RSS uncertainty")
+    plt.axvline(df_eph["time"].iloc[idx_rss_max], linestyle="--")
+
+    plt.xlabel("Date")
+    plt.ylabel("RSS uncertainty")
+    plt.title("Overall positional uncertainty of 3I/ATLAS over time")
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig("uncertainty_rss_vs_time.png", dpi=300)
+    plt.show()
+
+    # =========================================================
+# 10) SUMMARISE UNCERTAINTY EXTREMES
+# =========================================================
+
+if "SMAA_3sigma" in df_eph.columns:
+    idx_smaa_max = df_eph["SMAA_3sigma"].idxmax()
+    idx_smaa_min = df_eph["SMAA_3sigma"].idxmin()
+
+    print("\nSMAA_3sigma summary:")
+    print(f"Maximum on {df_eph['datetime_str'].iloc[idx_smaa_max]} : {df_eph['SMAA_3sigma'].iloc[idx_smaa_max]}")
+    print(f"Minimum on {df_eph['datetime_str'].iloc[idx_smaa_min]} : {df_eph['SMAA_3sigma'].iloc[idx_smaa_min]}")
+
+if "Area_3sigma" in df_eph.columns:
+    idx_area_max = df_eph["Area_3sigma"].idxmax()
+    idx_area_min = df_eph["Area_3sigma"].idxmin()
+
+    print("\nArea_3sigma summary:")
+    print(f"Maximum on {df_eph['datetime_str'].iloc[idx_area_max]} : {df_eph['Area_3sigma'].iloc[idx_area_max]}")
+    print(f"Minimum on {df_eph['datetime_str'].iloc[idx_area_min]} : {df_eph['Area_3sigma'].iloc[idx_area_min]}")
+
+if "RSS_3sigma" in df_eph.columns:
+    idx_rss_max = df_eph["RSS_3sigma"].idxmax()
+    idx_rss_min = df_eph["RSS_3sigma"].idxmin()
+
+    print("\nRSS_3sigma summary:")
+    print(f"Maximum on {df_eph['datetime_str'].iloc[idx_rss_max]} : {df_eph['RSS_3sigma'].iloc[idx_rss_max]}")
+    print(f"Minimum on {df_eph['datetime_str'].iloc[idx_rss_min]} : {df_eph['RSS_3sigma'].iloc[idx_rss_min]}")
+
+    # =========================================================
+# 11) CLEANER UNCERTAINTY PLOTS
+# =========================================================
+
+if "SMAA_3sigma" in df_eph.columns:
+    idx_smaa_max = df_eph["SMAA_3sigma"].idxmax()
+
+    plt.figure(figsize=(10, 5))
+    plt.plot(df_eph["time"], df_eph["SMAA_3sigma"], linewidth=2, label="SMAA_3sigma")
+    plt.scatter(df_eph["time"].iloc[idx_smaa_max], df_eph["SMAA_3sigma"].iloc[idx_smaa_max],
+                s=80, marker="o", label="Maximum")
+    plt.axvline(df_eph["time"].iloc[idx_smaa_max], linestyle="--")
+
+    plt.xlabel("Date")
+    plt.ylabel("3-sigma semi-major axis")
+    plt.title("Sky-plane uncertainty semi-major axis of 3I/ATLAS")
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig("uncertainty_smaa_vs_time.png", dpi=300)
+    plt.show()
+
+if "Area_3sigma" in df_eph.columns:
+    idx_area_max = df_eph["Area_3sigma"].idxmax()
+
+    plt.figure(figsize=(10, 5))
+    plt.plot(df_eph["time"], df_eph["Area_3sigma"], linewidth=2, label="Area_3sigma")
+    plt.scatter(df_eph["time"].iloc[idx_area_max], df_eph["Area_3sigma"].iloc[idx_area_max],
+                s=80, marker="o", label="Maximum")
+    plt.axvline(df_eph["time"].iloc[idx_area_max], linestyle="--")
+
+    plt.xlabel("Date")
+    plt.ylabel("3-sigma ellipse area")
+    plt.title("Sky-plane uncertainty ellipse area of 3I/ATLAS")
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig("uncertainty_area_vs_time.png", dpi=300)
+    plt.show()
+
+if "RSS_3sigma" in df_eph.columns:
+    idx_rss_max = df_eph["RSS_3sigma"].idxmax()
+
+    plt.figure(figsize=(10, 5))
+    plt.plot(df_eph["time"], df_eph["RSS_3sigma"], linewidth=2, label="RSS_3sigma")
+    plt.scatter(df_eph["time"].iloc[idx_rss_max], df_eph["RSS_3sigma"].iloc[idx_rss_max],
+                s=80, marker="o", label="Maximum")
+    plt.axvline(df_eph["time"].iloc[idx_rss_max], linestyle="--")
+
+    plt.xlabel("Date")
+    plt.ylabel("RSS 3-sigma uncertainty")
+    plt.title("Overall positional uncertainty of 3I/ATLAS")
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig("uncertainty_rss_vs_time.png", dpi=300)
+    plt.show()
+
+    # =========================================================
+
+#  DISTANCE FROM EARTH VS TIME + OBSERVABILITY
+# =========================================================
+
+if "delta" in df_eph.columns:
+    idx_earth_close = df_eph["delta"].idxmin()
+
+    plt.figure(figsize=(10, 5))
+    plt.plot(df_eph["time"], df_eph["delta"], linewidth=2, label="Distance from Earth")
+
+    # closest approach / best observing point
+    plt.scatter(
+        df_eph["time"].iloc[idx_earth_close],
+        df_eph["delta"].iloc[idx_earth_close],
+        s=80,
+        marker="o",
+        label="Closest approach / best observing window"
+    )
+
+    # vertical line at closest approach
+    plt.axvline(df_eph["time"].iloc[idx_earth_close], linestyle="--")
+
+    plt.xlabel("Date")
+    plt.ylabel("Distance from Earth [AU]")
+    plt.title("Distance of 3I/ATLAS from Earth over time")
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig("distance_earth_vs_time.png", dpi=300)
+    plt.show()
+
+    print("\nClosest approach to Earth / best observing window:")
+    print(f"Date: {df_eph['datetime_str'].iloc[idx_earth_close]}")
+    print(f"Distance from Earth: {df_eph['delta'].iloc[idx_earth_close]:.6f} AU")
+
+else:
+    print("No 'delta' column found.")

@@ -1,0 +1,40 @@
+import numpy as np
+import pandas as pd
+from astroquery.jplhorizons import Horizons
+
+# choose unique horizon id; avoid plain "Mercury"
+target = "199"       # Mercury
+# target = "499"     # Mars
+# target = "2000001" # Ceres
+location = "@sun"
+epochs = {"start":"2026-03-20","stop":"2026-04-18","step":"1d"}
+
+obj = Horizons(id=target, location=location, epochs=epochs)
+vec = obj.vectors()
+
+df = vec.to_pandas()
+
+AU_m = 149597870.7
+if df["x"].abs().max() > 1e3:
+    df[["x","y","z"]] /= AU_m
+df[["vx","vy","vz"]] *= (86400.0 / AU_m)
+
+df["r_au"] = np.sqrt(df["x"]**2 + df["y"]**2 + df["z"]**2)
+df["speed_au_per_day"] = np.sqrt(df["vx"]**2 + df["vy"]**2 + df["vz"]**2)
+
+title = f"Object: {target} (heliocentric vectors, AU)\n"
+header = "datetime_str\tx\ty\tz\tr_au\tvx\tvy\tvz\tspeed_au_per_day\n"
+out_lines = [title, header]
+
+for _, row in df.iterrows():
+    out_lines.append(
+        f"{row['datetime_str']}\t{row['x']:.9f}\t{row['y']:.9f}\t{row['z']:.9f}\t"
+        f"{row['r_au']:.9f}\t{row['vx']:.9f}\t{row['vy']:.9f}\t{row['vz']:.9f}\t"
+        f"{row['speed_au_per_day']:.9f}\n"
+    )
+
+with open("horizons_results.txt","w",encoding="utf-8") as f:
+    f.writelines(out_lines)
+
+print(f"Saved horizons_results.txt (target {target}, heliocentric AU)")
+print(f"Distance min/max: {df['r_au'].min():.9f}/{df['r_au'].max():.9f} AU")

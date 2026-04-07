@@ -1,0 +1,61 @@
+import numpy as np
+import pandas as pd
+from astroquery.jplhorizons import Horizons
+
+# 1) target: asteroid/comet id or name from HORIZONS
+#    EXAMPLES:
+#      433, "Ceres", "1P" (Halley), "C/2023 A3", "3552" etc
+target = "Ceres"
+
+# 2) Sun-centered (relative to Sun)
+#    can also be "@0" explicitly.
+location = "@sun"
+
+# 3) epoch range (UTC)
+#    set your period; this example is 30 daily points:
+epochs = {
+    "start": "2026-03-20",
+    "stop": "2026-04-18",
+    "step": "1d",
+}
+
+obj = Horizons(id=target, location=location, epochs=epochs)
+vec = obj.vectors()
+
+# JPL outputs x, y, z in AU (for vectors() from astroquery >= value by default),
+# But to be safe we convert from km -> AU if necessary:
+# check if columns in km by axis string, then convert. astroquery returns AU for x,y,z by default
+# and km/s for vx,vy,vz, so we'll standardize.
+if "x" in vec.colnames and vec["x"].unit.to_string() in ["km", "km/s"]:
+    km_to_AU = 1.0 / 149597870.7
+    vec["x"] = vec["x"] * km_to_AU
+    vec["y"] = vec["y"] * km_to_AU
+    vec["z"] = vec["z"] * km_to_AU
+    vec["vx"] = vec["vx"] * (86400.0 * km_to_AU)  # AU/day
+    vec["vy"] = vec["vy"] * (86400.0 * km_to_AU)
+    vec["vz"] = vec["vz"] * (86400.0 * km_to_AU)
+
+# If already AU, convert velocity km/s -> AU/day
+else:
+    km_to_AU = 1.0 / 149597870.7
+    vec["vx"] = vec["vx"] * (86400.0 * km_to_AU)
+    vec["vy"] = vec["vy"] * (86400.0 * km_to_AU)
+    vec["vz"] = vec["vz"] * (86400.0 * km_to_AU)
+
+df = vec.to_pandas()
+
+# Optional computed trajectory metrics
+df["r_au"] = np.sqrt(df["x"]**2 + df["y"]**2 + df["z"]**2)
+df["speed_au_per_day"] = np.sqrt(df["vx"]**2 + df["vy"]**2 + df["vz"]**2)
+
+# Select only the requested output columns
+df_out = df[[
+    "datetime_str", "x", "y", "z", "vx", "vy", "vz", "r_au", "speed_au_per_day"
+]]
+
+# Save to horizons_results.txt (tab-separated or CSV)
+df_out.to_csv("horizons_results.txt", sep="\t", index=False, float_format="%.9f")
+
+print("Written horizons_results.txt with position+trajectory in AU.")
+
+##idk what this is, was asking ai to see if the package worked, assuming it did (idk yet)

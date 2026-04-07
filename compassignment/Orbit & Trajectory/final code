@@ -1,0 +1,227 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from astroquery.jplhorizons import Horizons
+
+# =========================================================
+# 1. Settings
+# =========================================================
+target = "3I"
+
+epochs = {
+    "start": "2025-07-01",
+    "stop":  "2026-07-01",
+    "step":  "1d"
+}
+
+planet_ids = {
+    "Mercury": "199",
+    "Venus": "299",
+    "Earth": "399",
+    "Mars": "499",
+    "Jupiter": "599",
+    "Saturn": "699",
+    "Uranus": "799",
+    "Neptune": "899"
+}
+
+# =========================================================
+# 2. Functions
+# =========================================================
+def get_vectors_dataframe(target_id, epochs):
+    obj = Horizons(id=target_id, location="500@10", epochs=epochs)
+    vec = obj.vectors()
+    df = vec.to_pandas()
+
+    df["time"] = pd.to_datetime(
+        df["datetime_str"]
+        .str.replace("A.D.", "", regex=False)
+        .str.strip(),
+        errors="coerce"
+    )
+
+    df["r_au"] = np.sqrt(df["x"]**2 + df["y"]**2 + df["z"]**2)
+    df["speed_au_per_day"] = np.sqrt(df["vx"]**2 + df["vy"]**2 + df["vz"]**2)
+
+    return df
+
+
+def clean_ephemerides_dataframe(df):
+    df["time"] = pd.to_datetime(
+        df["datetime_str"]
+        .str.replace("A.D.", "", regex=False)
+        .str.strip(),
+        errors="coerce"
+    )
+    return df
+
+# =========================================================
+# 3. Data
+# =========================================================
+df_comet = get_vectors_dataframe(target, epochs)
+df_earth = get_vectors_dataframe("399", epochs)
+
+obj_eph = Horizons(id=target, location="500", epochs=epochs)
+df_eph = clean_ephemerides_dataframe(obj_eph.ephemerides().to_pandas())
+
+# =========================================================
+# 4. Key values
+# =========================================================
+start_row = df_comet.iloc[0]
+end_row = df_comet.iloc[-1]
+
+idx_peri = df_comet["r_au"].idxmin()
+peri_row = df_comet.loc[idx_peri]
+
+if "delta" in df_eph.columns:
+    idx_earth_close = df_eph["delta"].idxmin()
+    earth_close_row = df_eph.loc[idx_earth_close]
+else:
+    idx_earth_close = None
+    earth_close_row = None
+
+if "SMAA_3sigma" in df_eph.columns:
+    idx_smaa_max = df_eph["SMAA_3sigma"].idxmax()
+    idx_smaa_min = df_eph["SMAA_3sigma"].idxmin()
+else:
+    idx_smaa_max = None
+    idx_smaa_min = None
+
+# =========================================================
+# 5. Printed summary
+# =========================================================
+print("========== KEY RESULTS ==========")
+print(f"Start date: {start_row['datetime_str']}")
+print(f"End date:   {end_row['datetime_str']}")
+print()
+
+print("Perihelion:")
+print(f"Date: {peri_row['datetime_str']}")
+print(f"Distance from Sun: {peri_row['r_au']:.6f} AU")
+print()
+
+if earth_close_row is not None:
+    print("Closest approach to Earth:")
+    print(f"Date: {earth_close_row['datetime_str']}")
+    print(f"Distance from Earth: {earth_close_row['delta']:.6f} AU")
+    print()
+
+if idx_smaa_max is not None:
+    print("Uncertainty ellipse semi-major axis:")
+    print(f"Maximum on {df_eph['datetime_str'].iloc[idx_smaa_max]} : {df_eph['SMAA_3sigma'].iloc[idx_smaa_max]}")
+    print(f"Minimum on {df_eph['datetime_str'].iloc[idx_smaa_min]} : {df_eph['SMAA_3sigma'].iloc[idx_smaa_min]}")
+    print()
+
+# =========================================================
+# 6. Closest approaches to planets
+# =========================================================
+closest_approaches = []
+
+for planet_name, planet_id in planet_ids.items():
+    df_planet = get_vectors_dataframe(planet_id, epochs)
+
+    merged = pd.merge(
+        df_comet[["datetime_str", "x", "y", "z"]],
+        df_planet[["datetime_str", "x", "y", "z"]],
+        on="datetime_str",
+        suffixes=("_comet", "_planet")
+    )
+
+    merged["distance_au"] = np.sqrt(
+        (merged["x_comet"] - merged["x_planet"])**2 +
+        (merged["y_comet"] - merged["y_planet"])**2 +
+        (merged["z_comet"] - merged["z_planet"])**2
+    )
+
+    idx_min = merged["distance_au"].idxmin()
+    row_min = merged.loc[idx_min]
+
+    closest_approaches.append({
+        "planet": planet_name,
+        "date": row_min["datetime_str"],
+        "distance_au": row_min["distance_au"]
+    })
+
+df_close = pd.DataFrame(closest_approaches).sort_values("distance_au").reset_index(drop=True)
+print("Closest approaches to planets:")
+print(df_close)
+df_close.to_csv("3I_ATLAS_closest_approaches.csv", index=False)
+
+# =========================================================
+# 7. Orbit plot
+# =========================================================
+plt.figure(figsize=(8, 8))
+
+plt.plot(df_comet["x"], df_comet["y"], linewidth=2, label="3I/ATLAS")
+plt.plot(df_earth["x"], df_earth["y"], linestyle="--", linewidth=1.5, label="Earth orbit")
+
+plt.scatter(0, 0, s=150, marker="o", label="Sun")
+plt.scatter(start_row["x"], start_row["y"], s=70, marker="o", label="Start")
+plt.scatter(end_row["x"], end_row["y"], s=70, marker="s", label="End")
+plt.scatter(peri_row["x"], peri_row["y"], s=110, marker="*", label="Perihelion")
+
+plt.xlabel("x [AU]")
+plt.ylabel("y [AU]")
+plt.title("Heliocentric trajectory of 3I/ATLAS")
+plt.axis("equal")
+plt.grid(True)
+plt.legend()
+plt.tight_layout()
+plt.savefig("3I_ATLAS_orbit.png", dpi=300)
+plt.show()
+
+# =========================================================
+# 8. Distance from Sun
+# =========================================================
+plt.figure(figsize=(10, 5))
+plt.plot(df_comet["time"], df_comet["r_au"], linewidth=2, label="Distance from Sun")
+plt.scatter(df_comet["time"].iloc[idx_peri], df_comet["r_au"].iloc[idx_peri],
+            s=70, marker="o", label="Perihelion")
+plt.axvline(df_comet["time"].iloc[idx_peri], linestyle="--")
+
+plt.xlabel("Date")
+plt.ylabel("Distance from Sun [AU]")
+plt.title("Distance of 3I/ATLAS from the Sun over time")
+plt.grid(True)
+plt.legend()
+plt.tight_layout()
+plt.savefig("distance_sun_vs_time.png", dpi=300)
+plt.show()
+
+# =========================================================
+# 9. Distance from Earth / Observability
+# =========================================================
+if "delta" in df_eph.columns:
+    plt.figure(figsize=(10, 5))
+    plt.plot(df_eph["time"], df_eph["delta"], linewidth=2, label="Distance from Earth")
+    plt.scatter(df_eph["time"].iloc[idx_earth_close], df_eph["delta"].iloc[idx_earth_close],
+                s=70, marker="o", label="Best observing window")
+    plt.axvline(df_eph["time"].iloc[idx_earth_close], linestyle="--")
+
+    plt.xlabel("Date")
+    plt.ylabel("Distance from Earth [AU]")
+    plt.title("Distance of 3I/ATLAS from Earth over time")
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig("distance_earth_vs_time.png", dpi=300)
+    plt.show()
+
+# =========================================================
+# 10. Uncertainty ellipse semi-major axis
+# =========================================================
+if "SMAA_3sigma" in df_eph.columns:
+    plt.figure(figsize=(10, 5))
+    plt.plot(df_eph["time"], df_eph["SMAA_3sigma"], linewidth=2, label="SMAA_3sigma")
+    plt.scatter(df_eph["time"].iloc[idx_smaa_max], df_eph["SMAA_3sigma"].iloc[idx_smaa_max],
+                s=70, marker="o", label="Maximum")
+    plt.axvline(df_eph["time"].iloc[idx_smaa_max], linestyle="--")
+
+    plt.xlabel("Date")
+    plt.ylabel("3-sigma semi-major axis")
+    plt.title("Uncertainty ellipse semi-major axis of 3I/ATLAS over time")
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig("uncertainty_smaa_vs_time.png", dpi=300)
+    plt.show()

@@ -1,0 +1,193 @@
+# =========================================================
+# PHYS2116 - 3I/ATLAS analysis script
+# Orbit plot + uncertainty plot + closest planetary approaches
+# =========================================================
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from astroquery.jplhorizons import Horizons
+
+# -----------------------------
+# SETTINGS
+# -----------------------------
+target = "3I"   # 3I/ATLAS
+epochs = {
+    "start": "2025-07-01",
+    "stop":  "2026-07-01",
+    "step":  "1d"
+}
+
+# Major planets: Horizons IDs
+planet_ids = {
+    "Mercury": "199",
+    "Venus":   "299",
+    "Earth":   "399",
+    "Mars":    "499",
+    "Jupiter": "599",
+    "Saturn":  "699",
+    "Uranus":  "799",
+    "Neptune": "899"
+}
+
+# -----------------------------
+# HELPER FUNCTION
+# -----------------------------
+def get_vectors_dataframe(target_id, location="500@10", epochs=None):
+    """
+    Query heliocentric vectors from JPL Horizons and return as pandas dataframe.
+    location='500@10' gives Sun-centred vectors.
+    """
+    obj = Horizons(id=target_id, location=location, epochs=epochs)
+    vec = obj.vectors()
+    df = vec.to_pandas()
+
+    # Derived quantities
+    df["r_au"] = np.sqrt(df["x"]**2 + df["y"]**2 + df["z"]**2)
+    df["speed_au_per_day"] = np.sqrt(df["vx"]**2 + df["vy"]**2 + df["vz"]**2)
+
+    return df
+
+# -----------------------------
+# 1) COMET HELIOCENTRIC VECTORS
+# -----------------------------
+df_comet = get_vectors_dataframe(target, location="500@10", epochs=epochs)
+
+# Save raw comet vectors
+df_comet.to_csv("3I_ATLAS_vectors_full.csv", index=False)
+
+# -----------------------------
+# 2) GEOCENTRIC EPHEMERIDES
+# -----------------------------
+obj_eph = Horizons(id=target, location="500", epochs=epochs)
+eph = obj_eph.ephemerides()
+df_eph = eph.to_pandas()
+
+df_eph.to_csv("3I_ATLAS_ephemerides_full.csv", index=False)
+
+print("Available ephemeris columns:")
+print(df_eph.columns.tolist())
+
+# -----------------------------
+# 3) ORBIT PLOT (x-y plane)
+# -----------------------------
+plt.figure(figsize=(8, 8))
+plt.plot(df_comet["x"], df_comet["y"], label="3I/ATLAS orbit")
+plt.scatter(0, 0, marker="o", s=120, label="Sun")
+
+# Add Earth's orbit as a reference
+df_earth = get_vectors_dataframe("399", location="500@10", epochs=epochs)
+plt.plot(df_earth["x"], df_earth["y"], linestyle="--", label="Earth orbit")
+
+plt.xlabel("x [AU]")
+plt.ylabel("y [AU]")
+plt.title("Heliocentric orbit of 3I/ATLAS")
+plt.axis("equal")
+plt.grid(True)
+plt.legend()
+plt.tight_layout()
+plt.savefig("orbit_xy_3I_ATLAS.png", dpi=300)
+plt.show()
+
+# -----------------------------
+# 4) UNCERTAINTY PLOTS
+# -----------------------------
+# Try the most useful uncertainty columns if they exist
+uncertainty_candidates = [
+    "SMAA_3sigma",   # semi-major axis of sky-plane uncertainty ellipse
+    "SMIA_3sigma",   # semi-minor axis
+    "Area_3sigma",   # ellipse area
+    "RSS_3sigma",    # root-sum-square uncertainty
+    "RA_3sigma",
+    "DEC_3sigma"
+]
+
+available_uncertainties = [c for c in uncertainty_candidates if c in df_eph.columns]
+
+if len(available_uncertainties) == 0:
+    print("\nNo uncertainty columns were returned in this ephemeris query.")
+    print("You may need to inspect the Horizons settings or try a different query setup.")
+else:
+    for col in available_uncertainties:
+        plt.figure(figsize=(10, 5))
+        plt.plot(pd.to_datetime(df_eph["datetime_str"]), df_eph[col])
+        plt.xlabel("Date")
+        plt.ylabel(col)
+        plt.title(f"{col} vs time for 3I/ATLAS")
+        plt.grid(True)
+        plt.tight_layout()
+        plt.savefig(f"{col}_vs_time_3I_ATLAS.png", dpi=300)
+        plt.show()
+
+# -----------------------------
+# 5) CLOSEST APPROACH TO PLANETS
+# -----------------------------
+closest_approaches = []
+
+for planet_name, planet_id in planet_ids.items():
+    df_planet = get_vectors_dataframe(planet_id, location="500@10", epochs=epochs)
+
+    # Join on time string to align rows
+    merged = pd.merge(
+        df_comet[["datetime_str", "x", "y", "z"]],
+        df_planet[["datetime_str", "x", "y", "z"]],
+        on="datetime_str",
+        suffixes=("_comet", "_planet")
+    )
+
+    merged["distance_au"] = np.sqrt(
+        (merged["x_comet"] - merged["x_planet"])**2 +
+        (merged["y_comet"] - merged["y_planet"])**2 +
+        (merged["z_comet"] - merged["z_planet"])**2
+    )
+
+    idx_min = merged["distance_au"].idxmin()
+    row_min = merged.loc[idx_min]
+
+    closest_approaches.append({
+        "planet": planet_name,
+        "date": row_min["datetime_str"],
+        "distance_au": row_min["distance_au"]
+    })
+
+df_close = pd.DataFrame(closest_approaches)
+df_close = df_close.sort_values("distance_au").reset_index(drop=True)
+
+df_close.to_csv("3I_ATLAS_closest_approaches.csv", index=False)
+
+print("\nClosest approaches to planets:")
+print(df_close)
+
+# -----------------------------
+# 6) SUMMARY VALUES
+# -----------------------------
+# Perihelion estimate from sampled vectors
+idx_peri = df_comet["r_au"].idxmin()
+peri_row = df_comet.loc[idx_peri]
+
+print("\nApproximate perihelion from sampled data:")
+print(f"Date: {peri_row['datetime_str']}")
+print(f"Distance from Sun: {peri_row['r_au']:.6f} AU")
+
+# Closest Earth approach from ephemerides if available
+if "delta" in df_eph.columns:
+    idx_earth = df_eph["delta"].idxmin()
+    earth_row = df_eph.loc[idx_earth]
+    print("\nApproximate closest approach to Earth:")
+    print(f"Date: {earth_row['datetime_str']}")
+    print(f"Distance from Earth: {earth_row['delta']:.6f} AU")
+
+# Brightest date if magnitude exists
+if "V" in df_eph.columns:
+    idx_bright = df_eph["V"].idxmin()
+    bright_row = df_eph.loc[idx_bright]
+    print("\nApproximate brightest date:")
+    print(f"Date: {bright_row['datetime_str']}")
+    print(f"V magnitude: {bright_row['V']:.3f}")
+
+print("\nDone. Files saved:")
+print("- 3I_ATLAS_vectors_full.csv")
+print("- 3I_ATLAS_ephemerides_full.csv")
+print("- 3I_ATLAS_closest_approaches.csv")
+print("- orbit_xy_3I_ATLAS.png")
+print("- uncertainty plots (if returned)")
